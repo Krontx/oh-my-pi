@@ -2131,12 +2131,17 @@ export class EventController {
 	}
 
 	/**
-	 * UI-convergence teardown for a settled turn: terminal progress, the activity
-	 * meter, the working row, and the retry hint. Shared by the terminal
-	 * `agent_end` path and the idle reap, so a leaked settle converges to the same
-	 * idle UI as a normal end.
+	 * UI-convergence teardown for a settled turn: the terminal title, terminal
+	 * progress, the activity meter, the working row, and the retry hint. Shared by
+	 * the terminal `agent_end` path and the idle reap, so a leaked settle converges
+	 * to the same idle UI as a normal end.
 	 */
 	#reapWorkingUi(): void {
+		// The deferred settle deliberately left the tab reading "working" for a
+		// continuation that never came, and the terminal path resolves the title
+		// before calling in here; a reap is the last word on the turn, so it owns
+		// the reset rather than leaving the tab marked working/attention forever.
+		setTerminalTitleState("idle");
 		this.#setTerminalProgress(false);
 		this.ctx.statusLine.markActivityEnd();
 		if (this.ctx.loadingAnimation) {
@@ -2176,7 +2181,12 @@ export class EventController {
 	}
 
 	#reapWorkingLoaderIfIdle(): void {
-		const session = this.ctx.session;
+		// Focus mode dispatches events for `viewSession` and the row being reaped is
+		// the visible one, so the predicates run against it — as the streaming-loader
+		// reconciler does. Reading `session` here would reap a focused child's live
+		// row off an idle parent, and stall a focused idle child's leak behind a
+		// busy parent.
+		const session = this.ctx.viewSession;
 		// A live turn or a pending continuation still owns the working row.
 		if (session.isStreaming || session.hasPendingAsyncWork() || session.queuedMessageCount > 0) return;
 		// Maintenance overlays (auto-compaction / auto-retry) own the status area
