@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import {
+	dedentCodeBlock,
 	extractCodeBlocks,
+	extractCodeBlocksNewestFirst,
 	extractLastCommand,
 	extractLastLink,
 	extractLinks,
@@ -141,5 +143,41 @@ describe("extractLastLink", () => {
 		] as unknown as AgentMessage[];
 		expect(extractLastLink(messages)).toEqual({ text: "https://example.com/b", href: "https://example.com/b" });
 		expect(extractLastLink(messages.slice(3))).toBeUndefined();
+	});
+});
+
+describe("extractCodeBlocksNewestFirst", () => {
+	it("walks messages newest-first and reverses blocks within a message", () => {
+		const messages = [
+			{ role: "assistant", content: [{ type: "text", text: "old\n```ts\nconst oldValue = 1;\n```" }] },
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "new\n```sh\necho first\n```\n```py\nprint('last')\n```" }],
+			},
+		] as unknown as AgentMessage[];
+		expect(extractCodeBlocksNewestFirst(messages)).toEqual([
+			{ lang: "py", code: "print('last')" },
+			{ lang: "sh", code: "echo first" },
+			{ lang: "ts", code: "const oldValue = 1;" },
+		]);
+	});
+
+	it("skips user and text-less messages and returns [] when nothing qualifies", () => {
+		const messages = [
+			{ role: "user", content: "```\nnot assistant\n```" },
+			{ role: "assistant", content: [{ type: "text", text: "no fence here" }] },
+		] as unknown as AgentMessage[];
+		expect(extractCodeBlocksNewestFirst(messages)).toEqual([]);
+	});
+});
+
+describe("dedentCodeBlock", () => {
+	it("strips the deepest shared indent and keeps blank lines blank", () => {
+		expect(dedentCodeBlock("    echo one\n\n      echo two")).toBe("echo one\n\n  echo two");
+	});
+
+	it("leaves flush or blank-only code untouched", () => {
+		expect(dedentCodeBlock("echo one\n  echo two")).toBe("echo one\n  echo two");
+		expect(dedentCodeBlock("\n\n")).toBe("\n\n");
 	});
 });

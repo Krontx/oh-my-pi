@@ -99,6 +99,42 @@ export function extractLastCodeBlock(messages: readonly AgentMessage[]): CodeBlo
 	return undefined;
 }
 
+/**
+ * Walk the transcript backwards and return every fenced assistant code block,
+ * newest first: messages in reverse order, and within each message the blocks
+ * in reverse document order.
+ */
+export function extractCodeBlocksNewestFirst(messages: readonly AgentMessage[]): CodeBlock[] {
+	const blocks: CodeBlock[] = [];
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const text = assistantText(messages[i]);
+		if (!text) continue;
+		const messageBlocks = extractCodeBlocks(text);
+		for (let k = messageBlocks.length - 1; k >= 0; k--) {
+			blocks.push(messageBlocks[k]!);
+		}
+	}
+	return blocks;
+}
+
+/**
+ * Strip the deepest common leading whitespace shared by every non-blank line.
+ * Blocks nested in lists or quotes carry that structural indent into their
+ * source text; copied text should be flush.
+ */
+export function dedentCodeBlock(code: string): string {
+	const lines = code.split("\n");
+	let minIndent = Number.POSITIVE_INFINITY;
+	for (const line of lines) {
+		if (line.trim().length === 0) continue;
+		const indent = line.length - line.trimStart().length;
+		if (indent < minIndent) minIndent = indent;
+		if (minIndent === 0) break;
+	}
+	if (!Number.isFinite(minIndent) || minIndent <= 0) return code;
+	return lines.map(line => (line.trim().length === 0 ? "" : line.slice(minIndent))).join("\n");
+}
+
 /** Extract `>`-quoted blocks from assistant markdown, in document order. */
 export function extractQuoteBlocks(text: string): QuoteBlock[] {
 	return extractBlocks(text)

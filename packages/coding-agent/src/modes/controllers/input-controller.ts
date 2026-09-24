@@ -46,6 +46,7 @@ import type { TinyTitleProgressEvent } from "../../tiny/title-protocol";
 import { resolveReadPath } from "../../tools/path-utils";
 import { shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { vocalizer } from "../../tts/vocalizer";
+import { dedentCodeBlock, extractCodeBlocksNewestFirst } from "@oh-my-pi/pi-tui/overlays/copy-targets";
 import {
 	copyToClipboard,
 	readImageFromClipboard,
@@ -256,7 +257,13 @@ export class InputController {
 	#btwCopyListenerInstalled = false;
 	#globalEditorActionsListenerInstalled = false;
 	#expandToolsListenerInstalled = false;
+	#copyCodeBlockListenerInstalled = false;
 	#inlineMouseListenerInstalled = false;
+
+	/** Alt+Y copy walk: newest-first index, the block count it was computed against, and its session. */
+	#copyCodeBlockIndex = 0;
+	#copyCodeBlockTotal = 0;
+	#copyCodeBlockSession: unknown;
 
 	/** Click-candidate id the hover band currently tracks; repaint only on change. */
 	#lastHoverClickId: string | undefined;
@@ -327,6 +334,44 @@ export class InputController {
 
 	#abortStreamingTurn(): void {
 		void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
+	}
+
+	/**
+	 * Alt+Y / Alt+Shift+Y: copy an assistant code block from the transcript.
+	 * The walk starts at the newest block, steps to older blocks on repeat
+	 * (wrapping around), and resets to the newest when new blocks arrive or the
+	 * session changes. Copied text is dedented so list/quote-nested blocks land
+	 * flush on the clipboard.
+	 */
+	async #handleCopyCodeBlock(previous: boolean): Promise<void> {
+		const blocks = extractCodeBlocksNewestFirst(this.ctx.session.messages ?? []);
+		if (blocks.length === 0) {
+			this.ctx.showStatus("No code block to copy.");
+			return;
+		}
+		if (this.#copyCodeBlockSession !== this.ctx.session || blocks.length > this.#copyCodeBlockTotal) {
+			// New blocks (or a new session) reset the walk to the newest block.
+			this.#copyCodeBlockIndex = 0;
+		} else if (previous) {
+			this.#copyCodeBlockIndex = (this.#copyCodeBlockIndex - 1 + blocks.length) % blocks.length;
+		} else {
+			this.#copyCodeBlockIndex = (this.#copyCodeBlockIndex + 1) % blocks.length;
+		}
+		this.#copyCodeBlockSession = this.ctx.session;
+		this.#copyCodeBlockTotal = blocks.length;
+		const block = blocks[this.#copyCodeBlockIndex]!;
+		try {
+			await copyToClipboard(dedentCodeBlock(block.code));
+		} catch (error) {
+			this.ctx.showStatus(`Failed to copy code block: ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
+		const label = `${block.lang ? `${block.lang} ` : ""}code block`;
+		this.ctx.showStatus(
+			blocks.length === 1
+				? `Copied ${label}.`
+				: `Copied ${label} (${this.#copyCodeBlockIndex + 1} of ${blocks.length}). Alt+Y for older, Alt+Shift+Y for newer.`,
+		);
 	}
 
 	setupKeyHandlers(): void {
@@ -454,6 +499,23 @@ export class InputController {
 					return { consume: true };
 				}
 				this.toggleToolOutputExpansion();
+				return { consume: true };
+			});
+		}
+		if (!this.#copyCodeBlockListenerInstalled) {
+			this.#copyCodeBlockListenerInstalled = true;
+			// `app.clipboard.copyCodeBlock` (Alt+Y) copies the newest assistant
+			// code block; repeated presses walk to older blocks and
+			// `app.clipboard.copyCodeBlockPrev` (Alt+Shift+Y) walks back toward
+			// newer. It fires regardless of focus like app.tools.expand, but
+			// defers while a fullscreen/anchored overlay owns the active surface.
+			this.ctx.ui.addInputListener(data => {
+				const previous = this.ctx.keybindings.matches(data, "app.clipboard.copyCodeBlockPrev");
+				if (!previous && !this.ctx.keybindings.matches(data, "app.clipboard.copyCodeBlock")) {
+					return undefined;
+				}
+				if (this.ctx.ui.hasOverlay()) return undefined;
+				void this.#handleCopyCodeBlock(previous);
 				return { consume: true };
 			});
 		}

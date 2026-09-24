@@ -1,5 +1,7 @@
-import { beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, type Mock, spyOn, vi } from "bun:test";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import * as clipboard from "@oh-my-pi/pi-coding-agent/utils/clipboard";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
@@ -73,6 +75,8 @@ async function createContext() {
 		"app.clipboard.pasteImage": ["ctrl+v"],
 		"app.tools.toggleVisibility": ["ctrl+shift+o"],
 		"app.tools.expand": ["ctrl+o"],
+		"app.clipboard.copyCodeBlock": ["alt+y"],
+		"app.clipboard.copyCodeBlockPrev": ["alt+shift+y"],
 	};
 	const customHandlers = new Map<string, () => void>();
 	const setActionKeys = vi.fn();
@@ -103,6 +107,7 @@ async function createContext() {
 	const retry = vi.fn(async () => true);
 	const abort = vi.fn(async () => {});
 	const session = {
+		messages: [] as unknown[],
 		isStreaming: false,
 		isCompacting: false,
 		isGeneratingHandoff: false,
@@ -961,5 +966,125 @@ describe("InputController global tool-output expand (ctrl+o)", () => {
 
 		expect(dispatchInput(listeners, "\x0f")).toEqual({ consume: true });
 		expect(ctx.toolOutputExpanded).toBe(true);
+	});
+});
+
+describe("InputController code-block copy hotkeys", () => {
+	const ALT_Y = "\x1by";
+	const ALT_SHIFT_Y = "\x1bY";
+
+	function assistantText(text: string): AgentMessage {
+		return { role: "assistant", content: [{ type: "text", text }] } as unknown as AgentMessage;
+	}
+
+	async function flush(): Promise<void> {
+		await new Promise(resolve => setTimeout(resolve, 0));
+	}
+
+	function seedMessages(context: Awaited<ReturnType<typeof createContext>>, messages: AgentMessage[]): void {
+		const session = context.ctx.session as unknown as { messages: AgentMessage[] };
+		session.messages.length = 0;
+		session.messages.push(...messages);
+	}
+
+	function sessionMessages(context: Awaited<ReturnType<typeof createContext>>): AgentMessage[] {
+		return (context.ctx.session as unknown as { messages: AgentMessage[] }).messages;
+	}
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("copies the newest block, walks older on repeat, and wraps around", async () => {
+		const copySpy = spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
+		const context = await createContext();
+		const controller = new context.InputController(context.ctx);
+		controller.setupKeyHandlers();
+		seedMessages(context, [
+			assistantText("old\n```ts\nconst oldValue = 1;\n```"),
+			assistantText("new\n```sh\necho first\n```\n```py\nprint('last')\n```"),
+		]);
+		const listeners = registeredInputListeners(context.spies.addInputListener);
+
+		expect(dispatchInput(listeners, ALT_Y)).toEqual({ consume: true });
+		await flush();
+		expect(copySpy).toHaveBeenLastCalledWith("print('last')");
+		expect(context.ctx.showStatus).toHaveBeenLastCalledWith(
+			"Copied py code block (1 of 3). Alt+Y for older, Alt+Shift+Y for newer.",
+		);
+
+		expect(dispatchInput(listeners, ALT_Y)).toEqual({ consume: true });
+		await flush();
+		expect(copySpy).toHaveBeenLastCalledWith("echo first");
+
+		expect(dispatchInput(listeners, ALT_Y)).toEqual({ consume: true });
+		await flush();
+		expect(copySpy).toHaveBeenLastCalledWith("const oldValue = 1;");
+
+		// Wraps back to the newest block after the oldest.
+		expect(dispatchInput(listeners, ALT_Y)).toEqual({ consume: true });
+		await flush();
+		expect(copySpy).toHaveBeenLastCalledWith("print('last')");
+	});
+
+	it("walks toward newer with the previous binding and dedents nested blocks", async () => {
+		const copySpy = spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
+		const context = await createContext();
+		const controller = new context.InputController(context.ctx);
+		controller.setupKeyHandlers();
+		seedMessages(context, [assistantText("```bash\n    echo nested\n```")]);
+		const listeners = registeredInputListeners(context.spies.addInputListener);
+
+		expect(dispatchInput(listeners, ALT_SHIFT_Y)).toEqual({ consume: true });
+		await flush();
+		expect(copySpy).toHaveBeenLastCalledWith("echo nested");
+		expect(context.ctx.showStatus).toHaveBeenLastCalledWith("Copied bash code block.");
+	});
+
+	it("resets the walk to the newest when new blocks arrive", async () => {
+		const copySpy = spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
+		const context = await createContext();
+		const controller = new context.InputController(context.ctx);
+		controller.setupKeyHandlers();
+		seedMessages(context, [assistantText("```ts\none\n```\n```ts\ntwo\n```")]);
+		const listeners = registeredInputListeners(context.spies.addInputListener);
+
+		dispatchInput(listeners, ALT_Y);
+		await flush();
+		dispatchInput(listeners, ALT_Y);
+		await flush();
+		expect(copySpy).toHaveBeenLastCalledWith("one");
+
+		sessionMessages(context).push(assistantText("```ts\nthree\n```"));
+		dispatchInput(listeners, ALT_Y);
+		await flush();
+		expect(copySpy).toHaveBeenLastCalledWith("three");
+	});
+
+	it("reports when there is nothing to copy and still consumes the key", async () => {
+		const copySpy = spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
+		const context = await createContext();
+		const controller = new context.InputController(context.ctx);
+		controller.setupKeyHandlers();
+		const listeners = registeredInputListeners(context.spies.addInputListener);
+
+		expect(dispatchInput(listeners, ALT_Y)).toEqual({ consume: true });
+		await flush();
+		expect(copySpy).not.toHaveBeenCalled();
+		expect(context.ctx.showStatus).toHaveBeenLastCalledWith("No code block to copy.");
+	});
+
+	it("defers while an overlay owns the active surface", async () => {
+		const copySpy = spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
+		const context = await createContext();
+		const controller = new context.InputController(context.ctx);
+		controller.setupKeyHandlers();
+		seedMessages(context, [assistantText("```ts\none\n```")]);
+		context.setOverlayVisible(true);
+		const listeners = registeredInputListeners(context.spies.addInputListener);
+
+		expect(dispatchInput(listeners, ALT_Y)).toBeUndefined();
+		await flush();
+		expect(copySpy).not.toHaveBeenCalled();
 	});
 });
