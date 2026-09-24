@@ -2676,6 +2676,53 @@ export class Markdown implements Component {
 		return bodyLines;
 	}
 
+	/**
+	 * Render a code token as the boxed chrome tool results use
+	 * (`renderOutputBlock`): a full-width `╭─── lang ─────╮` bar, `│ ... │`
+	 * rows, and a `╰─────╯` bar, all in the fence-border color, so message
+	 * code blocks and tool cells share one visual language.
+	 */
+	#renderCodeBlockLines(token: Token, width: number): RenderedLine[] {
+		const box = this.#theme.symbols.boxRound;
+		const h = box.horizontal;
+		const v = box.vertical;
+		const cap = h.repeat(3);
+		const border = (text: string) => this.#theme.codeBlockBorder(text);
+		const lang = "lang" in token && typeof token.lang === "string" ? token.lang.trim() : "";
+		const lineWidth = Math.max(1, width);
+		const lines: RenderedLine[] = [];
+
+		// Top bar: `╭─── lang ─────╮`; the label truncates like renderOutputBlock.
+		const topLeft = `${box.topLeft}${cap}`;
+		const topRight = box.topRight;
+		const maxLabelWidth = Math.max(0, lineWidth - visibleWidth(topLeft) - visibleWidth(topRight));
+		const label = lang && maxLabelWidth > 1 ? truncateToWidth(` ${lang} `, maxLabelWidth, Ellipsis.Omit) : "";
+		const topFill = h.repeat(
+			Math.max(0, lineWidth - visibleWidth(topLeft) - visibleWidth(label) - visibleWidth(topRight)),
+		);
+		lines.push(renderedLine(`${border(topLeft)}${border(label)}${border(topFill)}${border(topRight)}`));
+
+		// Body rows: wrap inside the frame, then pad so both edges line up.
+		const codeIndent = padding(this.#codeBlockIndent);
+		const textWidth = Math.max(1, lineWidth - 4);
+		for (const bodyLine of this.#renderCodeBodyLines(token, codeIndent)) {
+			const rows = wrapTextWithAnsi(bodyLine.text, textWidth);
+			if (rows.length === 0) rows.push("");
+			for (const row of rows) {
+				const fill = padding(Math.max(0, textWidth - visibleWidth(row)));
+				lines.push(renderedLine(`${border(v)} ${row}${fill} ${border(v)}`));
+			}
+		}
+
+		// Bottom bar.
+		const bottomLeft = `${box.bottomLeft}${cap}`;
+		const bottomRight = box.bottomRight;
+		const bottomFill = h.repeat(Math.max(0, lineWidth - visibleWidth(bottomLeft) - visibleWidth(bottomRight)));
+		lines.push(renderedLine(`${border(bottomLeft)}${border(bottomFill)}${border(bottomRight)}`));
+
+		return lines;
+	}
+
 	#codeTokenHasClosingFence(token: Token): boolean {
 		const raw = "raw" in token && typeof token.raw === "string" ? token.raw : "";
 		const firstLineEnd = raw.indexOf("\n");
@@ -2983,12 +3030,9 @@ export class Markdown implements Component {
 					}
 				}
 
-				const codeIndent = padding(this.#codeBlockIndent);
-				lines.push(renderedLine(this.#theme.codeBlockBorder(`\`\`\`${token.lang || ""}`)));
-				for (const bodyLine of this.#renderCodeBodyLines(token, codeIndent)) {
-					lines.push(bodyLine);
+				for (const codeLine of this.#renderCodeBlockLines(token, width)) {
+					lines.push(codeLine);
 				}
-				lines.push(renderedLine(this.#theme.codeBlockBorder("```")));
 				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(renderedLine("")); // Add spacing after code blocks (unless space token follows)
 				}
@@ -3417,13 +3461,12 @@ export class Markdown implements Component {
 					lines.push({ text: this.#renderInlineTokens(token.tokens || [], styleContext), nested: false });
 				}
 			} else if (token.type === "code") {
-				// Code block in list item
-				const codeIndent = padding(this.#codeBlockIndent);
-				lines.push({ text: this.#theme.codeBlockBorder(`\`\`\`${token.lang || ""}`), nested: false });
-				for (const bodyLine of this.#renderCodeBodyLines(token, codeIndent)) {
-					lines.push({ ...bodyLine, nested: false });
+				// Code block in list item. The framed rows carry their own box and
+				// are composed to the full render width, so they pass through the
+				// list wrapper untouched instead of taking the bullet indent.
+				for (const codeLine of this.#renderCodeBlockLines(token, width)) {
+					lines.push({ ...codeLine, nested: true });
 				}
-				lines.push({ text: this.#theme.codeBlockBorder("```"), nested: false });
 			} else if (isMathToken(token)) {
 				// Display math block inside a list item: stack fractions / matrix rows.
 				const apply = styleContext?.applyText ?? ((t: string) => this.#applyDefaultStyle(t));

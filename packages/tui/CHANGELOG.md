@@ -19,6 +19,8 @@
 ### Changed
 
 - Updated the settings selector so clearing an input field fully unsets the corresponding setting.
+- Message code blocks render as framed blocks (language bar, framed body edges, bottom bar) using the same chrome as tool results, replacing the bare ``` fence rails.
+- Updated settings selector to perform full unsets when input fields are cleared
 
 ### Fixed
 
