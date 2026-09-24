@@ -117,24 +117,6 @@ export function extractCodeBlocksNewestFirst(messages: readonly AgentMessage[]):
 	return blocks;
 }
 
-/**
- * Strip the deepest common leading whitespace shared by every non-blank line.
- * Blocks nested in lists or quotes carry that structural indent into their
- * source text; copied text should be flush.
- */
-export function dedentCodeBlock(code: string): string {
-	const lines = code.split("\n");
-	let minIndent = Number.POSITIVE_INFINITY;
-	for (const line of lines) {
-		if (line.trim().length === 0) continue;
-		const indent = line.length - line.trimStart().length;
-		if (indent < minIndent) minIndent = indent;
-		if (minIndent === 0) break;
-	}
-	if (!Number.isFinite(minIndent) || minIndent <= 0) return code;
-	return lines.map(line => (line.trim().length === 0 ? "" : line.slice(minIndent))).join("\n");
-}
-
 /** Extract `>`-quoted blocks from assistant markdown, in document order. */
 export function extractQuoteBlocks(text: string): QuoteBlock[] {
 	return extractBlocks(text)

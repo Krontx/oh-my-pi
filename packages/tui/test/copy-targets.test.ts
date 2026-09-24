@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import {
-	dedentCodeBlock,
 	extractCodeBlocks,
 	extractCodeBlocksNewestFirst,
 	extractLastCommand,
@@ -168,16 +167,5 @@ describe("extractCodeBlocksNewestFirst", () => {
 			{ role: "assistant", content: [{ type: "text", text: "no fence here" }] },
 		] as unknown as AgentMessage[];
 		expect(extractCodeBlocksNewestFirst(messages)).toEqual([]);
-	});
-});
-
-describe("dedentCodeBlock", () => {
-	it("strips the deepest shared indent and keeps blank lines blank", () => {
-		expect(dedentCodeBlock("    echo one\n\n      echo two")).toBe("echo one\n\n  echo two");
-	});
-
-	it("leaves flush or blank-only code untouched", () => {
-		expect(dedentCodeBlock("echo one\n  echo two")).toBe("echo one\n  echo two");
-		expect(dedentCodeBlock("\n\n")).toBe("\n\n");
 	});
 });

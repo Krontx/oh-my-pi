@@ -117,8 +117,7 @@ export const TUI_KEYBINDINGS = {
 		description: "Delete to line end",
 	},
 	"tui.editor.yank": { defaultKeys: "ctrl+y", description: "Yank" },
-	// Alt+Y is claimed by `app.clipboard.copyCodeBlock`; yank-pop keeps its role on Ctrl+Alt+Y.
-	"tui.editor.yankPop": { defaultKeys: "ctrl+alt+y", description: "Yank pop" },
+	"tui.editor.yankPop": { defaultKeys: "alt+y", description: "Yank pop" },
 	"tui.editor.undo": { defaultKeys: ["ctrl+-", "ctrl+_"], description: "Undo" },
 	"tui.editor.spellingSuggestions": {
 		defaultKeys: "ctrl+.",

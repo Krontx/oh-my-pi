@@ -46,7 +46,8 @@ import type { TinyTitleProgressEvent } from "../../tiny/title-protocol";
 import { resolveReadPath } from "../../tools/path-utils";
 import { shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { vocalizer } from "../../tts/vocalizer";
-import { dedentCodeBlock, extractCodeBlocksNewestFirst } from "@oh-my-pi/pi-tui/overlays/copy-targets";
+import { extractCodeBlocksNewestFirst } from "@oh-my-pi/pi-tui/overlays/copy-targets";
+import type { AgentSession } from "../../session/agent-session";
 import {
 	copyToClipboard,
 	readImageFromClipboard,
@@ -260,10 +261,10 @@ export class InputController {
 	#copyCodeBlockListenerInstalled = false;
 	#inlineMouseListenerInstalled = false;
 
-	/** Alt+Y copy walk: newest-first index, the block count it was computed against, and its session. */
+	/** Alt+Y copy walk: newest-first index, the block count it was computed against, and the transcript it walked. */
 	#copyCodeBlockIndex = 0;
 	#copyCodeBlockTotal = 0;
-	#copyCodeBlockSession: unknown;
+	#copyCodeBlockSession?: AgentSession;
 
 	/** Click-candidate id the hover band currently tracks; repaint only on change. */
 	#lastHoverClickId: string | undefined;
@@ -337,41 +338,49 @@ export class InputController {
 	}
 
 	/**
-	 * Alt+Y / Alt+Shift+Y: copy an assistant code block from the transcript.
+	 * Alt+Shift+Y / Ctrl+Alt+Y: copy an assistant code block from the visible
+	 * transcript (`viewSession`, so a focused subagent copies its own blocks).
 	 * The walk starts at the newest block, steps to older blocks on repeat
 	 * (wrapping around), and resets to the newest when new blocks arrive or the
-	 * session changes. Copied text is dedented so list/quote-nested blocks land
-	 * flush on the clipboard.
+	 * viewed transcript changes. Copied text is verbatim, matching `/copy code`.
 	 */
 	async #handleCopyCodeBlock(previous: boolean): Promise<void> {
-		const blocks = extractCodeBlocksNewestFirst(this.ctx.session.messages ?? []);
+		const view = this.ctx.viewSession;
+		const blocks = extractCodeBlocksNewestFirst(view.messages);
 		if (blocks.length === 0) {
 			this.ctx.showStatus("No code block to copy.");
 			return;
 		}
-		if (this.#copyCodeBlockSession !== this.ctx.session || blocks.length > this.#copyCodeBlockTotal) {
-			// New blocks (or a new session) reset the walk to the newest block.
+		if (this.#copyCodeBlockSession !== view || blocks.length > this.#copyCodeBlockTotal) {
+			// New blocks (or a different transcript) reset the walk to the newest block.
 			this.#copyCodeBlockIndex = 0;
 		} else if (previous) {
 			this.#copyCodeBlockIndex = (this.#copyCodeBlockIndex - 1 + blocks.length) % blocks.length;
 		} else {
 			this.#copyCodeBlockIndex = (this.#copyCodeBlockIndex + 1) % blocks.length;
 		}
-		this.#copyCodeBlockSession = this.ctx.session;
+		this.#copyCodeBlockSession = view;
 		this.#copyCodeBlockTotal = blocks.length;
 		const block = blocks[this.#copyCodeBlockIndex]!;
 		try {
-			await copyToClipboard(dedentCodeBlock(block.code));
+			await copyToClipboard(block.code);
 		} catch (error) {
 			this.ctx.showStatus(`Failed to copy code block: ${error instanceof Error ? error.message : String(error)}`);
 			return;
 		}
-		const label = `${block.lang ? `${block.lang} ` : ""}code block`;
-		this.ctx.showStatus(
-			blocks.length === 1
-				? `Copied ${label}.`
-				: `Copied ${label} (${this.#copyCodeBlockIndex + 1} of ${blocks.length}). Alt+Y for older, Alt+Shift+Y for newer.`,
-		);
+		// The fence info string is model-controlled: sanitize it and cap the
+		// preview like the other copy feedback paths do.
+		const sanitized = sanitizeText(block.lang);
+		const lang = sanitized.length > 30 ? `${sanitized.slice(0, 30)}...` : sanitized;
+		const label = lang ? `${lang} code block` : "code block";
+		if (blocks.length === 1) {
+			this.ctx.showStatus(`Copied ${label}.`);
+			return;
+		}
+		const next = this.ctx.keybindings.getDisplayString("app.clipboard.copyCodeBlock");
+		const back = this.ctx.keybindings.getDisplayString("app.clipboard.copyCodeBlockPrev");
+		const hint = next && back ? ` ${next} for older, ${back} for newer.` : "";
+		this.ctx.showStatus(`Copied ${label} (${this.#copyCodeBlockIndex + 1} of ${blocks.length}).${hint}`);
 	}
 
 	setupKeyHandlers(): void {
