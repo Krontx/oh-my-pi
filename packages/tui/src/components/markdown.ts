@@ -2677,20 +2677,25 @@ export class Markdown implements Component {
 	}
 
 	/**
-	 * Render a code token as the boxed chrome tool results use
-	 * (`renderOutputBlock`): a full-width `╭─── lang ─────╮` bar, `│ ... │`
-	 * rows, and a `╰─────╯` bar, all in the fence-border color, so message
-	 * code blocks and tool cells share one visual language.
+	 * Render a code token as framed bars: a `╭─── lang ─────╮` rule above and a
+	 * `╰─────╯` rule below, with the body rows emitted literally between them.
+	 * The body keeps the literal-row contract (#7055): no rails, margins or
+	 * fills, so a terminal mouse-selection still copies the code byte-exact and
+	 * a copied heredoc terminator stays at column zero.
 	 */
 	#renderCodeBlockLines(token: Token, width: number): RenderedLine[] {
+		const codeIndent = padding(this.#codeBlockIndent);
+		const body = this.#renderCodeBodyLines(token, codeIndent);
+		const lineWidth = Math.max(1, width);
+		// Narrower than a minimal bar (`╭───╮`): a frame would exceed the render
+		// width and the wrap pass would shatter it, so emit the bare body rows.
+		if (lineWidth < 5) return body;
+
 		const box = this.#theme.symbols.boxRound;
 		const h = box.horizontal;
-		const v = box.vertical;
 		const cap = h.repeat(3);
 		const border = (text: string) => this.#theme.codeBlockBorder(text);
 		const lang = "lang" in token && typeof token.lang === "string" ? token.lang.trim() : "";
-		const lineWidth = Math.max(1, width);
-		const lines: RenderedLine[] = [];
 
 		// Top bar: `╭─── lang ─────╮`; the label truncates like renderOutputBlock.
 		const topLeft = `${box.topLeft}${cap}`;
@@ -2700,27 +2705,17 @@ export class Markdown implements Component {
 		const topFill = h.repeat(
 			Math.max(0, lineWidth - visibleWidth(topLeft) - visibleWidth(label) - visibleWidth(topRight)),
 		);
-		lines.push(renderedLine(`${border(topLeft)}${border(label)}${border(topFill)}${border(topRight)}`));
-
-		// Body rows: wrap inside the frame, then pad so both edges line up.
-		const codeIndent = padding(this.#codeBlockIndent);
-		const textWidth = Math.max(1, lineWidth - 4);
-		for (const bodyLine of this.#renderCodeBodyLines(token, codeIndent)) {
-			const rows = wrapTextWithAnsi(bodyLine.text, textWidth);
-			if (rows.length === 0) rows.push("");
-			for (const row of rows) {
-				const fill = padding(Math.max(0, textWidth - visibleWidth(row)));
-				lines.push(renderedLine(`${border(v)} ${row}${fill} ${border(v)}`));
-			}
-		}
 
 		// Bottom bar.
 		const bottomLeft = `${box.bottomLeft}${cap}`;
 		const bottomRight = box.bottomRight;
 		const bottomFill = h.repeat(Math.max(0, lineWidth - visibleWidth(bottomLeft) - visibleWidth(bottomRight)));
-		lines.push(renderedLine(`${border(bottomLeft)}${border(bottomFill)}${border(bottomRight)}`));
 
-		return lines;
+		return [
+			renderedLine(`${border(topLeft)}${border(label)}${border(topFill)}${border(topRight)}`),
+			...body,
+			renderedLine(`${border(bottomLeft)}${border(bottomFill)}${border(bottomRight)}`),
+		];
 	}
 
 	#codeTokenHasClosingFence(token: Token): boolean {
@@ -3387,8 +3382,15 @@ export class Markdown implements Component {
 			const continuationIndent = indent + padding(visibleWidth(bullet));
 
 			// Process item tokens; nested-list lines arrive structurally tagged and
-			// already carry their own full indent.
-			const itemLines = this.#renderListItem(item.tokens || [], depth, width, styleContext);
+			// already carry their own full indent. Code blocks inside the item get
+			// the hang width so their bars compose inside the bullet indent.
+			const itemLines = this.#renderListItem(
+				item.tokens || [],
+				depth,
+				width,
+				styleContext,
+				visibleWidth(continuationIndent),
+			);
 
 			if (itemLines.length > 0) {
 				const firstLine = itemLines[0]!;
@@ -3425,6 +3427,7 @@ export class Markdown implements Component {
 		parentDepth: number,
 		width: number,
 		styleContext?: InlineStyleContext,
+		codeIndentWidth = 0,
 	): RenderedListItemLine[] {
 		const lines: RenderedListItemLine[] = [];
 
@@ -3461,11 +3464,13 @@ export class Markdown implements Component {
 					lines.push({ text: this.#renderInlineTokens(token.tokens || [], styleContext), nested: false });
 				}
 			} else if (token.type === "code") {
-				// Code block in list item. The framed rows carry their own box and
-				// are composed to the full render width, so they pass through the
-				// list wrapper untouched instead of taking the bullet indent.
-				for (const codeLine of this.#renderCodeBlockLines(token, width)) {
-					lines.push({ ...codeLine, nested: true });
+				// Code block in a list item. Bars are composed inside the item's
+				// hang width so the wrapper's bullet/hang prefixes still apply to
+				// them (a code-first item keeps its bullet); literal body rows
+				// stay flush at column 0, preserving byte-exact terminal copies.
+				const codeWidth = Math.max(1, width - codeIndentWidth);
+				for (const codeLine of this.#renderCodeBlockLines(token, codeWidth)) {
+					lines.push({ ...codeLine, nested: false });
 				}
 			} else if (isMathToken(token)) {
 				// Display math block inside a list item: stack fractions / matrix rows.

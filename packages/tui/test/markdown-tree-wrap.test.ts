@@ -127,12 +127,13 @@ describe("Markdown tree-guide hanging wrap", () => {
 
 		const treeRow = plain.findIndex(line => line.includes("├──"));
 		expect(treeRow).toBeGreaterThan(0);
-		// The code line overflows, so a continuation row exists inside the
-		// frame — wrapped plainly, with no hanging tree prefix.
+		// The code line overflows, so a continuation row exists between the
+		// bars — and it starts flush at column 0, no hanging prefix.
 		const continuation = plain[treeRow + 1]!;
 		expect(treeRow + 1).toBeLessThan(plain.length - 1);
-		expect(continuation.startsWith("|")).toBe(true);
-		expect(continuation.includes("│")).toBe(false);
+		expect(continuation.length).toBeGreaterThan(0);
+		expect(continuation[0]).not.toBe(" ");
+		expect(continuation[0]).not.toBe("│");
 
 		for (const line of raw) {
 			expect(visibleWidth(line)).toBeLessThanOrEqual(WIDTH);

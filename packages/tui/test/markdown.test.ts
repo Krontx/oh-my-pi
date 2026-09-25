@@ -875,8 +875,7 @@ code block
 more text`,
 			];
 			const bar = `+${"-".repeat(78)}+`;
-			const codeRow = `|   code block${" ".repeat(64)} |`;
-			const expectedLines = ["hello this is text", "", bar, codeRow, bar, "", "more text"];
+			const expectedLines = ["hello this is text", "", bar, "  code block", bar, "", "more text"];
 
 			for (const text of cases) {
 				const markdown = new Markdown(text, 0, 0, defaultMarkdownTheme);
@@ -887,22 +886,51 @@ more text`,
 			}
 		});
 
-		it("frames the coding-agent fenced code body with a margin-aligned box", () => {
+		it("keeps coding-agent's padded fenced code body at column zero", () => {
 			const markdown = new Markdown("```sh\ncat <<'EOF'\nEOF\n```", 1, 0, defaultMarkdownTheme, undefined, 0);
 
 			const plainLines = markdown.render(80).map(line => stripVTControlCharacters(line).trimEnd());
 
-			// Framed block: one margin space, then a language bar and padded body rows.
+			// Framed bars carry the margin and fill; the body stays flush at
+			// column zero so a terminal copy pastes byte-exact (#7055).
 			const bar = (label: string) => {
 				const left = `+---${label}`;
 				return ` ${left}${"-".repeat(78 - left.length - 1)}+`;
 			};
-			const row = (text: string) => ` | ${text}${" ".repeat(78 - 4 - text.length)} |`;
-
-			expect(plainLines).toEqual([bar(" sh "), row("cat <<'EOF'"), row("EOF"), bar("")]);
+			expect(plainLines).toEqual([bar(" sh "), "cat <<'EOF'", "EOF", bar("")]);
 		});
 
-		it("keeps framed code body rows unprefixed through nested container wrapping", () => {
+		it("keeps the bullet when a code block is a list item's first token", () => {
+			const markdown = new Markdown(
+				"- ```bash\n  echo hi\n  ```\n- second item",
+				1,
+				0,
+				defaultMarkdownTheme,
+				undefined,
+				0,
+			);
+			const plainLines = markdown.render(60).map(line => stripVTControlCharacters(line).trimEnd());
+
+			// The top bar takes the bullet on the item's first row, the hang
+			// indent frames the bottom bar, and the body stays flush at column 0.
+			expect(plainLines[0]!.startsWith(" - +--- bash ")).toBe(true);
+			expect(plainLines[1]).toBe("echo hi");
+			expect(plainLines[2]!.startsWith("   +---")).toBe(true);
+			expect(plainLines[3]).toBe(" - second item");
+		});
+
+		it("falls back to unframed rows when the width cannot fit a bar", () => {
+			const markdown = new Markdown("```sh\nabcdef\n```", 1, 0, defaultMarkdownTheme, undefined, 0);
+			const lines = markdown.render(6);
+
+			// A frame wider than the render width would be shattered by the wrap
+			// pass, so the bars step aside and the body renders bare.
+			expect(Math.max(...lines.map(line => visibleWidth(line)))).toBeLessThanOrEqual(6);
+			expect(stripVTControlCharacters(lines.join("\n"))).not.toContain("+---");
+			expect(stripVTControlCharacters(lines.join(""))).toContain("abcdef");
+		});
+
+		it("keeps literal code body rows unprefixed through nested container wrapping", () => {
 			const longCodeLine = "x".repeat(24);
 			const cases = [
 				`- shell:
@@ -920,15 +948,11 @@ more text`,
 			for (const text of cases) {
 				const markdown = new Markdown(text, 1, 0, defaultMarkdownTheme, undefined, 0);
 				const plainLines = markdown.render(12).map(line => stripVTControlCharacters(line).trimEnd());
-				const bodyRows = plainLines.filter(line => line.includes("x") || line.includes("EOF"));
+				const literalRows = plainLines.filter(line => line.includes("x") || line === "EOF");
 
-				expect(bodyRows.length).toBeGreaterThan(2);
-				// Strip the frame (and any quote border) off each row: the code
-				// content survives nested container wrapping exactly.
-				const content = bodyRows
-					.map(line => line.replace(/^.*\| /, "").replace(/ \|$/, "").trimEnd())
-					.join("");
-				expect(content).toBe(`${longCodeLine}EOF`);
+				expect(literalRows.join("")).toBe(`${longCodeLine}EOF`);
+				expect(literalRows.length).toBeGreaterThan(2);
+				expect(literalRows.every(line => line.startsWith("x") || line === "EOF")).toBe(true);
 			}
 		});
 
@@ -1005,8 +1029,7 @@ more text`,
 				const left = `+---${label}`;
 				return `${left}${"-".repeat(80 - left.length - 1)}+`;
 			};
-			const row = (text: string) => `| ${text}${" ".repeat(80 - 4 - text.length)} |`;
-			expect(plainLines).toEqual([bar(" mermaid "), row("  flowchart TD"), row("    A --"), bar("")]);
+			expect(plainLines).toEqual([bar(" mermaid "), "  flowchart TD", "    A --", bar("")]);
 		});
 	});
 

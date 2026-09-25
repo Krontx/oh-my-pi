@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Message code blocks render between framed bars (language label above, rule below) instead of bare ``` fence rails; the body keeps the literal-row contract, so terminal selections stay byte-exact.
+
 ## [18.3.1] - 2026-09-25
 
 ### Breaking Changes
@@ -19,8 +23,6 @@
 ### Changed
 
 - Updated the settings selector so clearing an input field fully unsets the corresponding setting.
-- Message code blocks render as framed blocks (language bar, framed body edges, bottom bar) using the same chrome as tool results, replacing the bare ``` fence rails.
-- Updated settings selector to perform full unsets when input fields are cleared
 
 ### Fixed
 
